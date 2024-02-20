@@ -1,0 +1,130 @@
+const { Given, When, Then } = require('@cucumber/cucumber');
+const { browser, driver, $ } = require('@wdio/globals');
+const fs = require('fs');
+
+//Data model
+const credential = require('../../data/Logins.json');
+const dataCB = require('../../data/Cash&Bank.json');
+const dataGL = require('../../data/GeneralLedger.json');
+
+//Global constants
+const {
+  GENERAL_JOURNAL,
+  BANK_ACCOUNT,
+} = require('../../constants/global.constant.js');
+
+//Page Objects
+const pageFOHomePage = require('../../page_objects/Finance_Operations/page/home/FinopsHomepage.page.js');
+const pageCB = require('../../page_objects/Finance_Operations/page/cash_and_bank/CashAndBank.page.js');
+const pageGL = require('../../page_objects/Finance_Operations/page/general_journal/GeneralLedger.page.js');
+const pageLogin = require('../../page_objects/Finance_Operations/page/home/D365Login.page.js');
+
+//FA data index
+const firstIndex = 0;
+const TCSID = '91162';
+
+// CSV Library
+const json2csv = require('json2csv').parse;
+const isPassed = 'Passed';
+const fields = ['Description', 'Status'];
+const opts = { fields };
+
+When(/^91162 User navigate to General Journal$/, async () => {
+  await pageFOHomePage.navigateTo(GENERAL_JOURNAL);
+});
+Then(/^91162 Verify user in which Legal Entity$/, async () => {
+  let legalEntity = await pageLogin.Verify_user_in_which_legal_entity();
+
+  //Get the Voucher number to verify in the Bank Transaction
+  let dataArray = dataGL.GeneralJournalLine[firstIndex].TCS91783;
+  let objIndex = dataArray.findIndex(obj => obj.LegalEnity == '');
+  dataArray[objIndex].LegalEnity = legalEntity;
+  console.log(dataArray);
+});
+Then(
+  /^91162 Verify user able to create General Journal for Bank and Posted$/,
+  async () => {
+    let journalBatchNumber = await pageGL.Create_New_General_Journal(
+      dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex].JournalName
+    );
+    //Define the Legal entity
+    let entity = await dataGL.GeneralJournalLine[firstIndex].TCS91783[
+      firstIndex
+    ].LegalEnity;
+    let Entity = entity * 1;
+
+    let voucher = await pageGL.Create_New_Line_For_General_Journal(
+      dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex].AccountType,
+      dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex].Account[Entity]
+        .Value,
+      dataGL.GeneralJournalLine[firstIndex].GeneralJournalLineDetail[firstIndex]
+        .Description,
+      dataGL.GeneralJournalLine[firstIndex].GeneralJournalLineDetail[firstIndex]
+        .Debit,
+      dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex]
+        .OffsetAccountType,
+      dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex].OffsetAccount[
+        Entity
+      ].Value
+    );
+
+    await pageGL.Verify_GL_is_Posted_Sucessfully();
+
+    //Get the Voucher number to verify in the Bank Transaction
+    let dataArray = dataGL.GeneralJournalLine[firstIndex].TCS91783;
+    let objIndex = dataArray.findIndex(obj => obj.Voucher == '');
+    dataArray[objIndex].Voucher = voucher;
+    dataArray[objIndex].Journalbatchnumber = journalBatchNumber;
+    console.log(dataArray);
+  }
+);
+Then(
+  /^91162 Verify that a tick displays on the Posted column and the Posted Date$/,
+  async () => {
+    await browser.refresh();
+
+    await pageGL.Find_Posted_GeneralLedger(
+      dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex]
+        .Journalbatchnumber
+    );
+    await pageGL.Verify_Posted_Should_Be_Checked_Under_GL_Grid(
+      dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex].Descriptions
+    );
+  }
+);
+Then(/^91162 Verify the value of the Voucher of the Posted GL$/, async () => {
+  await browser.refresh();
+  await pageFOHomePage.navigateTo(BANK_ACCOUNT);
+
+  //Define the Legal entity
+  let entity = await dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex]
+    .LegalEnity;
+  let Entity = entity * 1;
+
+  await pageCB.OpenBankAccountViaFilter(
+    dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex].Account[Entity]
+      .Value
+  );
+
+  await pageCB.OpenVoucherBankAccountViaFilter(
+    dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex].Voucher
+  );
+  await pageCB.Verify_Voucher_Of_Bank_Account_After_Post_GL(
+    dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex].OffsetAccount[
+      Entity
+    ].Value,
+    dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex].MainAccount[
+      Entity
+    ].Value,
+    dataGL.GeneralJournalLine[firstIndex].GeneralJournalLineDetail[firstIndex]
+      .Debit,
+    TCSID
+  );
+
+  // Cast Status = Passed into FixedAssets json
+  dataGL.GeneralJournalLine[firstIndex].TCS91783[firstIndex].Status = isPassed;
+  // Call csv library to read and export FixedAssets json
+  const csv = json2csv(dataGL.GeneralJournalLine[firstIndex].TCS91783, opts);
+  fs.writeFileSync(`E:/QuocTD01/${TCSID}.csv`, csv);
+  console.log('File CSV export success!');
+});
